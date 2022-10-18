@@ -1288,8 +1288,8 @@ uint64_t SYSCALL_READ   = 63;
 uint64_t SYSCALL_WRITE  = 64;
 uint64_t SYSCALL_OPENAT = 56;
 uint64_t SYSCALL_BRK    = 214;
-uint64_t SYSCALL_FORK = 231;
-uint64_t SYSCALL_WAIT = 232;
+uint64_t SYSCALL_FORK = 220;
+uint64_t SYSCALL_WAIT = 230;
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -6197,8 +6197,8 @@ void selfie_compile() {
   emit_exit();
   emit_read();
   emit_write();
-  emit_open();
   emit_fork();
+  emit_open();
   emit_wait();
 
   emit_malloc();
@@ -7681,75 +7681,39 @@ void implement_write(uint64_t* context) {
 }
 
 
-void copy_memory(uint64_t* parent, uint64_t* child) {
-
-    uint64_t lo;
-    uint64_t hi;
-    
-    uint64_t* parent_table;
-    uint64_t* table;
-    uint64_t frame;
-    parent_table = get_pt(parent);
-
-    lo = lowest_lo_page(parent);
-    hi = highest_lo_page(parent);
-
-    table = (uint64_t*) load_virtual_memory(parent_table, page_table(vctxt));
-
-    while (lo < hi) {
-        if (is_virtual_address_mapped(parent_table, (uint64_t) get_PTE_address_for_page(parent_table, table , lo)))
-        {
-          frame = load_virtual_memory(parent_table, (uint64_t) get_PTE_address_for_page(parent_table, table, lo));
-          map_page(child, lo, get_frame_for_page(parent_table,  get_page_of_virtual_address(frame)));
-        }
-          
-        lo = lo + 1;
-    }
-
-
-
-    lo = *(get_regs(parent) + REG_SP);
-    hi = HIGHESTVIRTUALADDRESS;
-    while (lo <= hi)
-    {
-      if (is_virtual_address_mapped(parent_table, lo))
-        map_and_store(child, lo, load_virtual_memory(parent, lo));
-      lo = lo + 1;
-    }
-
-
-
-
-    
-}
-
 
 void implement_fork(uint64_t * parent)
 {
 
   uint64_t* context;
-  
+  uint64_t lo;
+  uint64_t hi;
+  uint64_t* parent_table;
   
   context = create_context(MY_CONTEXT, 0);
   
   
-  copy_memory(parent, context);
 
   //Copy context
-  set_pc(parent,get_pc(parent) + INSTRUCTIONSIZE);
-  set_pc(context,get_pc(parent));
+  set_pc(parent,get_pc(parent)+INSTRUCTIONSIZE);
+  set_pc(context, get_pc(parent));
   set_parent(context,parent);
 
 
+  set_lowest_lo_page(context, get_lowest_lo_page(parent));
+  set_highest_lo_page(context, get_highest_hi_page(parent));
+  set_lowest_hi_page(context, get_lowest_hi_page(parent));
+  set_highest_hi_page(context, get_highest_hi_page(parent));
+
   set_code_seg_start(context, get_code_seg_start(parent));
   set_code_seg_size(context, get_code_seg_size(parent));
-  set_program_break(context, get_program_break(parent));
 
   set_data_seg_start(context, get_data_seg_start(parent));
   set_data_seg_size(context, get_data_seg_size(parent));
 
   set_heap_seg_start(context, get_heap_seg_start(parent));
 
+  set_virtual_context(context, get_virtual_context(parent));
   set_pt(context, get_pt(parent));
 
   //Schedule process
@@ -7757,9 +7721,50 @@ void implement_fork(uint64_t * parent)
   set_next_context(parent, context);
   set_pid_status(context, old_pid);
 
+
+  //Copy memory
+
+  
+  parent_table = get_pt(parent);
+  
+  lo = *(get_regs(parent) + REG_SP);
+  
+  hi = HIGHESTVIRTUALADDRESS;
+
+  print("HELLO");
+  while (lo <= hi) {
+   
+   if (is_virtual_address_valid(lo, WORDSIZE))
+   {
+    if (is_virtual_address_mapped(parent_table, lo))
+    {
+      if (is_stack_address(parent, lo)){
+        map_and_store(context, lo, load_virtual_memory(parent, lo));
+      }
+    }
+   }
+       
+    lo = lo + WORDSIZE;
+  }
+  
+
+  
+  lo = get_code_seg_start(parent);
+  hi = *(get_regs(parent) + REG_GP);
+
+  while (lo < hi)
+  {
+      
+    if (is_virtual_address_mapped(parent_table, lo))
+      map_and_store(context, lo, load_virtual_memory(parent, lo));
+    lo = lo + WORDSIZE;
+    
+  }
+
   //return value
   *(get_regs(parent)+REG_A0) = old_pid;
   *(get_regs(context)+REG_A0) = 0;
+
   //Increase pid counter
   old_pid = old_pid+1;
   
@@ -7770,7 +7775,10 @@ void implement_fork(uint64_t * parent)
 void implement_wait(uint64_t * context)
 {
 
- 
+  while (get_child_status(context) == 0)
+  {
+
+  }
 
   *(get_regs(context)+REG_A0) = get_child_status(context);
   
@@ -7780,17 +7788,17 @@ void emit_fork() {
   create_symbol_table_entry(LIBRARY_TABLE, "fork", 0, PROCEDURE, UINT64_T, 0, code_size);
 
   //Don't know why but it asks for A1 and A2
-  emit_load(REG_A1, REG_SP, 0); // filename
+  emit_load(REG_A1, REG_SP, 0);
   emit_addi(REG_SP, REG_SP, WORDSIZE);
 
-  emit_load(REG_A2, REG_SP, 0); // flags
+  emit_load(REG_A2, REG_SP, 0);
   emit_addi(REG_SP, REG_SP, WORDSIZE);
 
   emit_addi(REG_A7, REG_ZR, SYSCALL_FORK);
 
   emit_ecall();
 
-  emit_jalr(REG_ZR, REG_RA, 0);
+  emit_jalr(REG_ZR, REG_RA, REG_A1);
 
 }
 
@@ -7803,7 +7811,7 @@ void emit_wait() {
 
   emit_ecall();
 
-  emit_jalr(REG_ZR, REG_RA, 0);
+  emit_jalr(REG_ZR, REG_RA, REG_A0);
 }
 
 void emit_open() {
@@ -11468,12 +11476,6 @@ uint64_t handle_system_call(uint64_t* context) {
 
   a7 = *(get_regs(context) + REG_A7);
 
-  if (a7 == SYSCALL_FORK) {
-    implement_fork(context);
-  }
-  else if (a7 == SYSCALL_WAIT){
-    implement_wait(context);
-  }
   if (a7 == SYSCALL_BRK) {
     if (get_gc_enabled_gc(context))
       implement_gc_brk(context);
@@ -11493,6 +11495,12 @@ uint64_t handle_system_call(uint64_t* context) {
     //TODO: Modificar para que el programa no termine hasta que todos los contextos terminen
     //return DONOTEXIT
     return EXIT;
+  }
+  else if (a7 == SYSCALL_FORK){
+    implement_fork(context);
+  }
+  else if (a7 == SYSCALL_WAIT){
+    implement_wait(context);
   }
   
 
