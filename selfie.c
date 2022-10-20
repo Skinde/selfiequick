@@ -1288,8 +1288,8 @@ uint64_t SYSCALL_READ   = 63;
 uint64_t SYSCALL_WRITE  = 64;
 uint64_t SYSCALL_OPENAT = 56;
 uint64_t SYSCALL_BRK    = 214;
-uint64_t SYSCALL_FORK = 220;
-uint64_t SYSCALL_WAIT = 230;
+uint64_t SYSCALL_FORK = 231;
+uint64_t SYSCALL_WAIT = 232;
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -6197,8 +6197,8 @@ void selfie_compile() {
   emit_exit();
   emit_read();
   emit_write();
-  emit_fork();
   emit_open();
+  emit_fork();
   emit_wait();
 
   emit_malloc();
@@ -7682,105 +7682,121 @@ void implement_write(uint64_t* context) {
 
 
 
+
+
 void implement_fork(uint64_t * parent)
 {
-
+  
   uint64_t* context;
   uint64_t lo;
   uint64_t hi;
+  uint64_t frame;
   uint64_t* parent_table;
-  
   context = create_context(MY_CONTEXT, 0);
   
   
 
+
   //Copy context
-  set_pc(parent,get_pc(parent)+INSTRUCTIONSIZE);
-  set_pc(context, get_pc(parent));
+
+  print("Started fork");
+  set_pc(parent,get_pc(parent) + INSTRUCTIONSIZE);
+  set_pc(context,get_pc(parent));
   set_parent(context,parent);
-
-
-  set_lowest_lo_page(context, get_lowest_lo_page(parent));
-  set_highest_lo_page(context, get_highest_hi_page(parent));
+  set_name(context, (char*) old_pid);
+  set_lowest_lo_page(context, get_page_of_virtual_address(code_start));
+  set_highest_lo_page(context, get_lowest_lo_page(parent));
   set_lowest_hi_page(context, get_lowest_hi_page(parent));
   set_highest_hi_page(context, get_highest_hi_page(parent));
 
   set_code_seg_start(context, get_code_seg_start(parent));
   set_code_seg_size(context, get_code_seg_size(parent));
+  set_program_break(context, get_program_break(parent));
 
   set_data_seg_start(context, get_data_seg_start(parent));
   set_data_seg_size(context, get_data_seg_size(parent));
 
-  set_heap_seg_start(context, get_heap_seg_start(parent));
+  set_heap_seg_start(context,  get_heap_seg_start(parent));
 
-  set_virtual_context(context, get_virtual_context(parent));
-  set_pt(context, get_pt(parent));
 
   //Schedule process
   set_next_context(context, get_next_context(parent));
   set_next_context(parent, context);
   set_pid_status(context, old_pid);
 
-
-  //Copy memory
-
   
   parent_table = get_pt(parent);
-  
-  lo = *(get_regs(parent) + REG_SP);
-  
-  hi = HIGHESTVIRTUALADDRESS;
 
-  print("HELLO");
-  while (lo <= hi) {
-   
-   if (is_virtual_address_valid(lo, WORDSIZE))
-   {
-    if (is_virtual_address_mapped(parent_table, lo))
-    {
-      if (is_stack_address(parent, lo)){
-        map_and_store(context, lo, load_virtual_memory(parent, lo));
-      }
-    }
-   }
-       
-    lo = lo + WORDSIZE;
-  }
-  
+  /*
+  //Copy Code
+  print("PASSED SCHEDULE");
+  lo = 0;
+  hi = code_size;
 
-  
-  lo = get_code_seg_start(parent);
-  hi = *(get_regs(parent) + REG_GP);
 
-  while (lo < hi)
-  {
+  print("TO ENTER FIRST LOOP");
+  while (lo < hi) {
       
-    if (is_virtual_address_mapped(parent_table, lo))
-      map_and_store(context, lo, load_virtual_memory(parent, lo));
-    lo = lo + WORDSIZE;
-    
+      map_and_store(context, get_code_seg_size(context)+lo, load_code(lo));
+      lo = lo + WORDSIZE;
   }
+
+  print("PASSED FIRST LOOP");
+  //Copy data
+  lo = 0;
+  hi = data_size;
+  while (lo < hi) {
+    map_and_store(context, get_data_seg_start(context) + lo, load_data(lo));
+    lo = lo + WORDSIZE;
+  }
+
+  */
+
+  //Copy heap
+    lo = lowest_lo_page(parent);
+    hi = highest_lo_page(parent);
+
+
+    while (lo < hi)
+    {
+      
+      frame = get_frame_for_page(parent_table, lo);
+      map_page(context, lo, frame);
+      
+      lo = lo + 1;
+    }
+
+  //Copy stack
+
+  lo = lowest_hi_page(parent);
+  hi = highest_hi_page(parent);
+  while (lo < hi)
+    {
+      
+      frame = get_frame_for_page(parent_table, lo);
+      map_page(context, lo, frame);
+      
+      
+      lo = lo + 1;
+    }
+
 
   //return value
   *(get_regs(parent)+REG_A0) = old_pid;
   *(get_regs(context)+REG_A0) = 0;
-
   //Increase pid counter
   old_pid = old_pid+1;
   
   
-
+  print("Fork Complete");
 }
 
 void implement_wait(uint64_t * context)
 {
 
-  while (get_child_status(context) == 0)
-  {
-
-  }
-
-  *(get_regs(context)+REG_A0) = get_child_status(context);
+  
+  print("WAIT CALLED!!!!!");
+  *(get_regs(context)+REG_A0) = 0;
   
 }
 
@@ -7788,30 +7804,34 @@ void emit_fork() {
   create_symbol_table_entry(LIBRARY_TABLE, "fork", 0, PROCEDURE, UINT64_T, 0, code_size);
 
   //Don't know why but it asks for A1 and A2
-  emit_load(REG_A1, REG_SP, 0);
+
+  emit_load(REG_A0, REG_SP, 0); // return
   emit_addi(REG_SP, REG_SP, WORDSIZE);
 
-  emit_load(REG_A2, REG_SP, 0);
+  emit_load(REG_A1, REG_SP, 0); // filename
+  emit_addi(REG_SP, REG_SP, WORDSIZE);
+
+  emit_load(REG_A2, REG_SP, 0); // flags
   emit_addi(REG_SP, REG_SP, WORDSIZE);
 
   emit_addi(REG_A7, REG_ZR, SYSCALL_FORK);
 
   emit_ecall();
 
-  emit_jalr(REG_ZR, REG_RA, REG_A1);
+  emit_jalr(REG_ZR, REG_RA, 0);
 
 }
 
 void emit_wait() {
   create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, UINT64_T, 1, code_size);
-  emit_load(REG_A0, REG_SP, 0); // status
+  emit_load(REG_A0, REG_SP, 0); // return
   emit_addi(REG_SP, REG_SP, WORDSIZE);
 
   emit_addi(REG_A7, REG_ZR, SYSCALL_WAIT);
 
   emit_ecall();
 
-  emit_jalr(REG_ZR, REG_RA, REG_A0);
+  emit_jalr(REG_ZR, REG_RA, 0);
 }
 
 void emit_open() {
@@ -11476,6 +11496,7 @@ uint64_t handle_system_call(uint64_t* context) {
 
   a7 = *(get_regs(context) + REG_A7);
 
+  
   if (a7 == SYSCALL_BRK) {
     if (get_gc_enabled_gc(context))
       implement_gc_brk(context);
@@ -11496,7 +11517,7 @@ uint64_t handle_system_call(uint64_t* context) {
     //return DONOTEXIT
     return EXIT;
   }
-  else if (a7 == SYSCALL_FORK){
+  else if (a7 == SYSCALL_FORK) {
     implement_fork(context);
   }
   else if (a7 == SYSCALL_WAIT){
