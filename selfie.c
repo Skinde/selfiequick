@@ -7745,7 +7745,7 @@ void implement_fork(uint64_t * parent)
 
   lo = *(get_regs(context) + REG_SP);
   hi = HIGHESTVIRTUALADDRESS;
-  while (lo < hi)
+  while (lo <= hi)
   {
     if (is_virtual_address_mapped(parent_table, lo))
     {
@@ -11605,7 +11605,14 @@ uint64_t mipster(uint64_t* to_context) {
     }
     else if (type_of_machine_tested == HYPSTER)
     {
-      to_context = from_context;
+      if (get_next_context(from_context))
+      {
+        to_context = get_next_context(from_context);
+      }
+      else
+      {
+        to_context = from_context;
+      }   
     }
     else {
       if (get_next_context(from_context))
@@ -12035,7 +12042,7 @@ uint64_t selfie(uint64_t extras) {
       argument = peek_argument(counter);
       if (string_compare(argument, "-y"))
       {
-        type_of_machine_tested = MIPSTER;
+        type_of_machine_tested = HYPSTER;
       }
       counter = counter + 1;
     }
